@@ -1,0 +1,777 @@
+<div id="infobox">
+  <div id="location"><span class="icon">📍 </span>Unknown</div>
+  <div id="temp"><span class="icon">🌡️ </span>?°C</div>
+  <div id="time"><span class="icon">🕐 </span>00:00</div>
+  <div id="windspeed"><span class="icon">༄ </span>?km/h</div>
+  <div id="cloudcover"><span class="icon">☁ </span>?%</div>
+  <input id="locationInput" type="text" placeholder="Enter city name..." style="width: 120px; height: 20px">
+  <button id="submitLocationButton" onclick="weatherMaster()"><span id="submitLocationButtonText">🔍︎</span></button>
+</div>
+<canvas id="c"></canvas>
+
+<style>
+  html, body
+  {
+    background-color: lightskyblue;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+  }
+  #c
+  {
+    background-color: lightskyblue; 
+    outline: 5px solid #7393B3;
+    outline-offset: -5px;
+    display: block;
+    position: fixed;
+    top: 0px;
+    z-index: 0;
+  }
+  #infobox
+  {
+    position: absolute;
+    display: flex;
+    box-sizing: border-box;
+    min-width: 140px;
+    padding: 10px 16px;
+    top: 20px;
+    right: 20px;
+    z-index: 1;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.4;
+    border: 2px rgba(255, 255, 255, 0.4) solid;
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+    font-size: 13px;
+    text-shadow: 0px 1px 3px rgba(0, 0, 0, 0.4);
+  }
+  
+  .icon
+  {
+    filter: brightness(1) grayscale(0.7); 
+    opacity: 1; 
+    font-size: 15px;
+    display: inline-block;
+    width: 25px;
+    text-align: center;
+  }
+  
+  #submitLocationButtonText{filter: brightness(0.6) grayscale(1);}
+</style>
+
+<script>
+  // Initialise Canvas
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  
+  let wW = window.innerWidth;
+  let wH = window.innerHeight;
+  canvas.width = wW; 
+  canvas.height = wH;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const cityInputField = document.getElementById('locationInput');
+  
+  // Helper Functions
+  const getRandInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min; // INCLUSIVE FOR BOTH PARAMS
+  const lerp = (start, end, amount) => start + (end - start) * amount;
+  
+  // CONFIGURATION VALUES:
+  let animateBool = true;
+  
+  // Clouds & Atmosphere
+  let horizon = wH/2 + 100;
+  let cloudCover = 70; // in %
+  let cloudCount = Math.round(cloudCover/5);
+  let windSpeed = 0.5;
+  let isRaining = false;
+  let minParticleCount = 10;
+  let maxParticleCount = 1000;
+  let rainSpawnRate = minParticleCount;
+  let particleGraphics = 'notfancy';
+  
+  // Sky
+  let lastSkyState = 'clear';
+  
+  // Time
+  let sunTime = 14;
+  let moonTime = 0;
+  let isDay = true;
+  let sunrise = 6;
+  let sunset = 18;
+  let moonrise = 22;
+  let moonset = 5;
+  
+  // Sun States
+  let sunColour = 'khaki';
+  let sunState;
+  let isGoldHour;
+  let sunPercentage;
+  
+  // Animation / Frames
+  let lastTime = 0;
+  let animID = 0;
+  
+  // Orb Coordinates
+  let sunX;
+  let sunY;
+  let moonX;
+  let moonY;
+  
+  // Location & API
+  let city = "Rotterdam";
+  let cityTimeZone = "UTC";
+  let weatherData;
+  
+  function getCityValue(field)
+  {
+    if (field.value.trim() !== "")
+    {
+      city = field.value.trim().slice(0,100).replace(/[<>/}{;+=*^()]/gu, "");
+      return city;
+    }
+    else{city = "Rotterdam"}
+    return "Rotterdam";
+  }
+  
+  function getLocalTime()
+  {
+    return new Intl.DateTimeFormat("en-GB", {timeZone: cityTimeZone, hour: "2-digit", minute: "2-digit", /* second: "2-digit", */ hour12: false}).format(new Date());
+  }
+  
+  function decimaliseTime(dateString)
+  {
+    let timeStr;
+    if (dateString.includes("T")) timeStr = dateString.slice(11,15);
+    else timeStr = dateString;
+    const [h,m] = timeStr.split(":").map(Number);
+    return h + (m/60);
+  }
+  
+  async function geoLocate(city)
+  {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&format=json`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.results) return [data.results[0].latitude, data.results[0].longitude];
+  }
+  
+  async function fetchWeatherData()
+  {
+    const coords = await geoLocate(city);
+    if (!coords)
+    {
+      city = "City not found!";
+      // UI Updating
+      document.getElementById('location').lastChild.textContent = city;
+      document.getElementById('temp').lastChild.textContent = "?°C";
+      document.getElementById('time').lastChild.textContent = "00:00";
+      document.getElementById('windspeed').lastChild.textContent = "?km/h";
+      cloudCover = "?";
+  
+      console.error("City not found!")
+      return null;
+    }
+    const lat = coords[0];
+    const lon = coords[1];
+  
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+    '&daily=sunrise,sunset&current=is_day,cloud_cover,temperature_2m,wind_speed_10m,weather_code&timezone=auto';
+  
+    const response = await fetch(url);
+    const data = await response.json();
+  
+    //console.log(data);
+    if (data) return data;
+  }
+  
+  function applyWeatherData(data)
+  {
+    if (!data || data == undefined)
+    {
+      console.error('Data not found.');
+      return;
+    }
+    
+    // Time
+    cityTimeZone = data.timezone;
+    isDay = data.current.is_day === 1;
+    sunrise = decimaliseTime(data.daily.sunrise[0]);
+    sunset = decimaliseTime(data.daily.sunset[0]);
+    sunTime = decimaliseTime(getLocalTime());
+    moonTime = (sunTime + 12) % 24;
+  
+    // Precipitation
+    isRaining = (data.current.weather_code >= 50 && data.current.weather_code <= 69);
+    
+    // UI Updating
+    document.getElementById('location').lastChild.textContent = city;
+    document.getElementById('temp').lastChild.textContent = data.current.temperature_2m + "°C";
+    document.getElementById('time').lastChild.textContent = getLocalTime();
+    document.getElementById('windspeed').lastChild.textContent = data.current.wind_speed_10m + "km/h";
+    
+    cloudCover = data.current.cloud_cover;
+    cloudCount = Math.round(cloudCover/5);
+    cloudStorage.length = 0;
+    for (let i = 0; i < cloudCount; i++)
+    {
+      forgeCloud(6);
+    }
+  }
+  
+  async function weatherMaster()
+  {
+    getCityValue(cityInputField);
+    weatherData = await fetchWeatherData();
+    applyWeatherData(weatherData);
+  }
+  
+  // UI Updating
+  function updateUI()
+  {
+    document.getElementById('time').lastChild.textContent = getLocalTime();
+    //uiTime.lastChild.textContent = `${String(Math.floor(sunTime-(sunTime%1))).padStart(2, "0")}:${String(Math.floor((sunTime%1)*60)).padStart(2, "0")}`;
+    const uiCloudCover = document.getElementById('cloudcover');
+    uiCloudCover.lastChild.textContent = `${cloudCover}%`;
+  }
+  
+  // Storage Arrays
+  const cloudStorage = [];
+  const particleTracker = [];
+  const skyColours = {goldHour: [252, 196, 61], clearSky: [135, 206, 250 ] /* lightskyblue */, overcastSky: [150, 150, 150], stormySky: [99, 102, 105], nightSky: [10, 10, 25]};
+  
+  // Sky Colour Parsing
+  let skyColour = window.getComputedStyle(document.body).backgroundColor;
+  let [rStr, gStr, bStr] = skyColour.match(/\d+/g) || ['135', '206', '250'];
+  let red =   Math.max(parseInt(rStr)-35, 0);
+  let green = Math.max(parseInt(gStr)-57, 0);
+  let blue =  Math.max(parseInt(bStr)-13, 0);
+  
+  function forgeCloud(puffN)
+  {
+    let cloudObj = { x: null, y: null, r: getRandInt(10, 25), puffs: [], disabled: false};
+  
+    cloudObj.x = getRandInt(0, canvas.width);
+    cloudObj.y = getRandInt(30, horizon - (isRaining ? 240 : 150));
+  
+    for (let i = 0; i < puffN; i++) {
+      cloudObj.puffs.push(Math.random() * 15); // X Offset
+      cloudObj.puffs.push(Math.random() * 10); // R Offset
+    }
+    cloudStorage.push(cloudObj);
+  }
+  
+  function forgeParticle(x,y,type)
+  {
+    switch (type){
+      case 'rain':
+        particleTracker.push
+        (
+          {
+            x: x,
+            y: y,
+            type: type, opacity: (getRandInt(2,4)/10), col: 'white', angle: (Math.PI / 24) / Math.max(windSpeed, (1/1000)), length: getRandInt(5,10), width: Math.random()*0.5+0.3,
+            vx: windSpeed, vy: Math.random()*10-5, ax: 0.02, ay: 0.4, maxvx: 3, maxvy: 20, windF: 5
+          }
+        ); 
+        break;
+      
+      case 'snow': break; //TODO
+  
+      default: break;
+    }
+  }
+  
+  function calcOrbPos(currentTime, tRise, tSet)
+  {
+    const pathRadiusX = wW/4 * 1.75;
+    const pathRadiusY = horizon * 0.8;
+    let orbAngle = Math.PI * (1-(tSet < tRise ? (currentTime+24 - tRise) / (tSet+24-tRise) : (currentTime - tRise) / (tSet-tRise)));
+    let orbX = -Math.cos(orbAngle) * pathRadiusX; //(Math.cos(orbAngle) > 0 ? 3 : 1)
+    let orbY = -Math.sin(orbAngle) * pathRadiusY;
+    const pos = [orbX, orbY];
+    return pos;
+  }
+  
+  function drawOrb(x,y,type)
+  {
+    ctx.save()
+    switch (type)
+    {
+      // DRAW SUN:
+      case "sun":      
+        // Yellow Circle
+        ctx.beginPath();
+  
+        let sunR = (isGoldHour ? 30 : 25);
+        sunColour = 'khaki';
+        ctx.fillStyle = sunColour;
+        ctx.globalAlpha = '0.9';
+        ctx.filter = 'blur(16px)';
+        ctx.arc(x, y, sunR, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // White Circle
+        ctx.beginPath();
+        ctx.arc(x, y, sunR-5, 0, 2 * Math.PI);
+  
+        ctx.fillStyle ='white';
+        ctx.globalAlpha = '0.9';
+        ctx.filter = 'blur(6px)';
+        ctx.fill();
+        
+        break;
+  
+      // DRAW MOON:
+      case "moon":
+        // Purple(?) Circle
+        ctx.beginPath();
+        ctx.arc(x, y, 25, 0, 2 * Math.PI);
+        // Set Style Yellow
+        ctx.fillStyle = 'indigo';
+        ctx.globalAlpha = '0.3';
+        ctx.filter = 'blur(20px)';
+        ctx.fill();
+  
+        // White Circle
+        ctx.beginPath();
+        ctx.arc(x, y, 20, 0, 2 * Math.PI);
+        // Set Style White
+        ctx.fillStyle = 'rgb(230, 230, 230)';
+        ctx.globalAlpha = '0.9';
+        ctx.filter = 'blur(3px)';
+        ctx.fill();
+        break;
+    }
+    ctx.restore();
+  }
+  
+  function setSkyColour(state)
+  {
+    if (state == lastSkyState) return;
+  
+    lastSkyState = state;
+    let keyframe = 'clearSky';
+    switch (state)
+    {
+      case 'night':
+        keyframe = 'nightSky';
+        c.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        document.body.style.backgroundColor = 'rgb(0,0,0)';
+        break;
+      case 'sunrise':
+      case 'sunset':
+      case 'goldHour':
+      case 'golden':
+      case 'gold':
+        keyframe = 'goldHour';
+        c.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        document.body.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        break;
+      case 'clear':
+        keyframe = 'clearSky';
+        c.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        document.body.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        break;
+      case 'overcast':
+        keyframe = 'overcastSky';
+        c.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        document.body.style.backgroundColor = `rgb(${skyColours[keyframe][0]-40},${skyColours[keyframe][1]-40},${skyColours[keyframe][2]-40})`;
+        break;
+      case 'stormy':
+        keyframe = 'stormySky';
+        c.style.backgroundColor = `rgb(${skyColours[keyframe][0]},${skyColours[keyframe][1]},${skyColours[keyframe][2]})`;
+        document.body.style.backgroundColor = `rgb(${skyColours[keyframe][0]-65},${skyColours[keyframe][1]-70},${skyColours[keyframe][2]-70})`;
+        break;
+  
+      default: c.style.backgroundColor = 'lightskyblue'; document.body.style.backgroundColor = 'lightskyblue'; break;
+    }
+  }
+  
+  function drawCloud(nth) {
+    if (cloudCount > 99) return;
+  
+    // Grab Data from Cloud Storage
+    const puffCount = cloudStorage[nth].puffs.length / 2;
+    let startX = cloudStorage[nth].x;
+    let x = startX;
+    const startY = cloudStorage[nth].y;
+    const y = startY;
+    let r = cloudStorage[nth].r;
+  
+    // Init Pos/Scale Vars
+    let rNew = 0;
+    let randOffset = 0;
+    const middlePuffsBegin = puffCount - Math.round(puffCount / 4) - 1;
+    const middlePuffsEnd = puffCount + Math.round(puffCount / 4) - 1;
+  
+    // ===================== NORMAL CLOUD =====================
+    ctx.save();
+    // Lighting Engine
+    const midX = startX + (r*puffCount/2);
+    const lightDX = (((sunX + wW/2) - midX)*sunPercentage) + (((moonX + wW/2) - midX)*(1-sunPercentage));
+    const lightDY = (((sunY + horizon) - startY)*sunPercentage) + (((moonY + horizon) - startY)*(1-sunPercentage));
+    const absDist = Math.max(Math.hypot(lightDX,lightDY), 1);
+  
+    const q = 10;
+    const lumF = 1.3;
+  
+    const cloudHighlight = Math.max(255-(absDist/q), 180+(sunPercentage*50));
+  
+    const gradient = ctx.createLinearGradient(midX+(lightDX/absDist*(r*2)), startY+(lightDY/absDist*(r*2)), midX-(lightDX/absDist*(r*2)), startY-(lightDY/absDist*(r*2)));
+  
+    gradient.addColorStop(0, `rgb(${cloudHighlight}, ${cloudHighlight}, ${cloudHighlight})`);
+  
+    gradient.addColorStop(0.7, `rgb(${(cloudHighlight+(red*lumF))/2}, ${(cloudHighlight+(green*lumF))/2}, ${(cloudHighlight+(blue*lumF))/2})`);
+      
+    gradient.addColorStop(1, `rgb(${Math.min(red*lumF+20,255)}, ${Math.min(green*lumF+20,255)}, ${Math.min(blue*lumF+20,255)})`);
+  
+    ctx.lineWidth = 5;
+    ctx.fillStyle = gradient;
+    ctx.globalAlpha = r / 31.25;
+    ctx.filter = `blur(${r * 0.1}px)`;
+  
+  
+    // Rendering Engine
+    ctx.beginPath();
+    for (let i = 0; i < puffCount * 2; i += 2)
+    {
+      let rOffset = cloudStorage[nth].puffs[i+1];
+      randOffset = cloudStorage[nth].puffs[i];
+      rNew = r + rOffset;
+        
+      if (i >= middlePuffsBegin && i <= middlePuffsEnd) {
+        ctx.arc(x + randOffset, y - rNew * 1.3, rNew, 0, 2 * Math.PI);
+        ctx.arc(x + randOffset, y, rNew, 0, 2 * Math.PI);
+      }
+      else{ctx.arc(x + randOffset, y, rNew, 0, 2 * Math.PI);}
+        
+      x += r;
+    }
+  
+    // ===================== SKY HOLE PUNCH SILHOUETTE =====================
+    ctx.save();
+    // Set Style
+    ctx.lineWidth = 5;
+    ctx.fillStyle = skyColour;
+    ctx.strokeStyle = skyColour;
+    ctx.globalAlpha = 1.0;
+    ctx.filter = 'blur(5px)';
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    // =====================================================================
+  
+    // Fill Gradient
+    ctx.fill();
+    
+    ctx.restore();
+  }
+  
+  function drawParticle(nth)
+  {
+    const p = particleTracker[nth]
+    if(!p){return}
+    
+    let x = p.x;
+    let y = p.y;
+    let len = p.length;
+    let angle = p.angle;
+     
+    ctx.save()
+    // Set Style
+    ctx.globalAlpha = p.opacity;
+    ctx.strokeStyle = p.col;
+    ctx.lineWidth = 1;
+  
+    // Raindrop Path
+    ctx.beginPath();
+    ctx.moveTo(x,y);
+    ctx.lineTo(x + Math.sin(angle) * len, y + Math.cos(angle) * len);
+    ctx.stroke();
+  
+    ctx.restore();
+  }
+  
+  function drawAllParticles()
+  {
+    ctx.save()
+    if (particleGraphics != 'fancy')
+    {
+      ctx.globalAlpha = '0.5';
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+    }
+  
+    ctx.beginPath();
+    for (let i = 0; i < particleTracker.length; i++)
+    {
+      const p = particleTracker[i];
+      if(!p){continue}
+      let x = p.x;
+      let y = p.y;
+      let len = p.length;
+      let angle = p.angle;
+  
+      if (particleGraphics == 'fancy')
+      {
+        ctx.globalAlpha = p.opacity;
+        ctx.strokeStyle = p.col;
+        ctx.lineWidth = p.width;
+      }
+  
+      // Raindrop Path
+      ctx.moveTo(x,y);
+      ctx.lineTo(x + Math.sin(angle) * len, y + Math.cos(angle) * len);
+      if (particleGraphics == 'fancy') ctx.stroke();
+    }
+  
+    if (particleGraphics != 'fancy') ctx.stroke();
+    ctx.restore();
+  }
+  
+  function updateParticle(nth)
+  {
+    const p = particleTracker[nth];
+    if (!p) return;
+  
+    switch (p.type)
+    {
+      case 'rain':
+        if (p.x > wW+50 || p.x < -50 || p.y > horizon-15)
+        {
+          ctx.save();
+          ctx.beginPath();
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = p.col;
+          ctx.arc(p.x,horizon-(p.width*2),p.width*3,0,Math.PI*2);
+          ctx.fill();
+          ctx.restore();
+          particleTracker[nth] = particleTracker[particleTracker.length-1];
+          particleTracker.pop();
+          return;
+        }
+  
+  
+        if(p.vx<p.maxvx) p.vx += p.ax;
+        if(p.vy<p.maxvy) p.vy += p.ay;
+  
+  
+        p.x += p.vx + (windSpeed * p.windF);
+        p.y += p.vy;
+        p.length = Math.min(p.length + p.vy/24, 20);
+      
+      default: break;
+    }
+  }
+  
+  function drawScenery()
+  {
+    ctx.save();
+    ctx.fillStyle = 'saddlebrown';
+    ctx.strokeStyle = 'palegoldenrod'; // wheat: palegoldenrod, grass: darkolivegreen
+    ctx.lineWidth = 15;
+    ctx.beginPath();
+    ctx.filter = 'none';
+    ctx.fillRect(0,horizon,wW,wH);
+    ctx.moveTo(0,horizon+5);
+    ctx.lineTo(wW,horizon+5);
+    ctx.filter = 'blur(2px)';
+    ctx.stroke();
+    ctx.restore();
+  }
+  
+  function resize()
+  {
+    wW = window.innerWidth; 
+    wH = window.innerHeight;
+    horizon = wH / 2 + 100;
+    canvas.width = wW; 
+    canvas.height = wH;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < cloudCount; i++)
+    {
+      drawCloud(i);
+    }
+  }
+  window.addEventListener('resize', resize);
+  
+  // Call Functions
+  for (let i = 0; i < cloudCount; i++)
+  {
+    forgeCloud(6);
+  }
+  // Initial Particles
+  if (isRaining)
+  {
+    for (let i = 0; i < minParticleCount; i++)
+    {
+      forgeParticle(getRandInt(5, canvas.width - 5), getRandInt(-50, 0), 'rain');
+    }
+  }
+  
+  function drawTrackers()
+  {
+    ctx.save();
+    ctx.globalAlpha = '0.7';
+  
+    // HORIZON LINE
+    ctx.beginPath();
+    ctx.save();
+    ctx.globalAlpha = '0.2';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'crimson';
+    ctx.moveTo(0,horizon);
+    ctx.lineTo(wW, horizon);
+    ctx.stroke();
+    ctx.restore();
+    
+    // ORB DOTS
+    ctx.beginPath();
+    ctx.fillStyle = 'orange';
+    ctx.arc(sunX+wW/2, sunY+horizon, 5, 0, 2*Math.PI);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = 'indigo';
+    ctx.arc(moonX+wW/2, moonY+horizon, 5, 0, 2*Math.PI);
+    ctx.fill();
+  
+    // ORB AXIS / ANCHOR
+    ctx.beginPath();
+    ctx.fillStyle = 'crimson';
+    ctx.arc(wW/2, horizon, 5, 0, 2*Math.PI); 
+    ctx.fill();
+  
+    // ORB-AXIS LINES
+    ctx.beginPath();
+    ctx.save();
+    ctx.globalAlpha = '0.2';
+    ctx.lineWidth = 2;
+  
+    ctx.strokeStyle = 'orange';
+    ctx.moveTo(sunX + wW/2, sunY + horizon);
+    ctx.lineTo(wW/2, horizon);
+    ctx.stroke();
+  
+    ctx.beginPath();
+    ctx.strokeStyle = 'indigo';
+    ctx.moveTo(moonX + wW/2, moonY + horizon);
+    ctx.lineTo(wW/2, horizon);
+    ctx.stroke();
+    ctx.restore();
+    
+    
+    ctx.restore();
+  }
+  
+  // RENDER ALL FUNCTION:
+  function render(currentTime)
+  {
+    if (!animateBool)
+    {
+      cancelAnimationFrame(animID);
+      for (let i = 0; i < cloudCount; i++)
+      {
+        drawOrb(75, 75, 'sun');
+        drawCloud(i);
+      }
+      return;
+    }
+    animID = requestAnimationFrame(render);
+    let elapsed = currentTime - lastTime;
+  
+    if (elapsed >= 100)
+    {
+      // Sky Colour Grabbing / Parsing
+      skyColour = window.getComputedStyle(document.body).backgroundColor;
+      [rStr, gStr, bStr] = skyColour.match(/\d+/g) || ['135', '206', '250'];
+      red =   Math.max(parseInt(rStr)-35, 0);
+      green = Math.max(parseInt(gStr)-57, 0);
+      blue =  Math.max(parseInt(bStr)-13, 0);
+  
+      const cloudStorageLen = cloudStorage.length;
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  
+      // Calculate & Draw Sun:
+      let orbPos = calcOrbPos(sunTime, sunrise, sunset);
+      sunX = orbPos[0];
+      sunY = orbPos[1];
+      sunPercentage = Math.min(Math.max((horizon - sunY) / 100, 0), 1);
+      
+      let goldHourLen = 2;
+      let halfGoldLen = goldHourLen/2;
+      sunState = 
+        sunTime >= sunrise-halfGoldLen && sunTime <= sunrise+halfGoldLen ? 'rise' : 
+        sunTime >= sunset-halfGoldLen && sunTime <= sunset+halfGoldLen ? 'set' : 
+        sunTime > sunrise+halfGoldLen && sunTime < sunset-halfGoldLen ? 'day' : 'night';
+      isGoldHour = sunState == 'set' || sunState == 'rise';
+      if (isDay || isGoldHour) drawOrb(sunX + wW/2, sunY + horizon, "sun");
+    
+      // Calculate & Draw Moon:
+      orbPos = calcOrbPos(moonTime, moonrise, moonset);
+      moonX = orbPos[0];
+      moonY = orbPos[1];
+      if (!isDay) drawOrb(moonX + wW/2, moonY + horizon, "moon");
+  
+      // Increment Time of Day:
+      // sunTime = (sunTime + 0.1)%24;
+      // moonTime = (moonTime + 0.1)%24;
+  
+  
+  
+      if (cloudStorageLen < 70)
+      {
+        for (let i = 0; i < cloudStorageLen; i++)
+        {
+          cloudStorage[i].x += windSpeed * cloudStorage[i].r / 16;
+          if (cloudStorage[i].x > wW)
+          {
+            cloudStorage[i].x = -1 * cloudStorage[i].r * (cloudStorage[i].puffs.length / 2);
+          }
+  
+          drawCloud(i);
+        }
+      }
+      
+  
+      if (isRaining)
+      {
+        setSkyColour('overcast');
+        rainSpawnRate = Math.floor(lerp(rainSpawnRate, maxParticleCount, 0.005));
+        drawAllParticles();
+        for (let i = particleTracker.length-1; i >= 0; i--)
+        {
+          updateParticle(i);
+        }
+        
+        for (let i = particleTracker.length; i < rainSpawnRate; i++)
+        {
+          forgeParticle(getRandInt(-50, canvas.width - 5), getRandInt(-50, 0), 'rain');
+        }
+      }
+  
+      drawScenery();
+      if (!isDay) setSkyColour('night');
+      if (isDay && !isRaining) setSkyColour('clear');
+      if (isGoldHour && !isRaining) setSkyColour('goldHour');
+  
+      updateUI();
+      //drawTrackers();
+  
+      lastTime = currentTime - (elapsed % 100);
+    }
+  }
+  
+  async function init()
+  {
+    await weatherMaster();
+    render();
+  }
+  init();
+</script>
