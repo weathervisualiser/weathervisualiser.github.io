@@ -7,6 +7,9 @@
   <input id="locationInput" type="text" placeholder="Enter city name..." style="width: 120px; height: 20px">
   <button id="submitLocationButton" onclick="weatherMaster()"><span id="submitLocationButtonText">🔍︎</span></button>
 </div>
+<div id="open-meteo-attribution">
+  Weather data by <a href="https://open-meteo.com/">Open-Meteo</a>
+</div>
 <canvas id="c"></canvas>
 
 <style>
@@ -62,6 +65,9 @@
   }
   
   #submitLocationButtonText{filter: brightness(0.6) grayscale(1);}
+  #open-meteo-attribution{color: white; font-family: Verdana; font-size: 11px; position: absolute; z-index: 100; bottom: 15px; right: 15px}
+  #open-meteo-attribution a{text-decoration: none; color: skyblue}
+  #open-meteo-attribution a:hover{text-decoration: underline; color: lightblue}
 </style>
 
 <script>
